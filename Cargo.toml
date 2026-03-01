@@ -5,6 +5,8 @@ edition = "2021"
 description = "iced_table but updated to work with iced version 0.14.0"
 license-file = "LICENSE"
 readme = "README.md"
+repository = "https://github.com/kevkoa2106/iced_table2"
+homepage = "https://github.com/kevkoa2106/iced_table2"
 keywords = ["iced", "widget"]
 
 [dependencies]
