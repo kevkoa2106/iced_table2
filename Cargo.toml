@@ -1,0 +1,12 @@
+[package]
+name = "iced_table2"
+version = "0.14.0"
+edition = "2021"
+description = "iced_table but updated to work with iced version 0.14.0"
+license-file = "LICENSE"
+readme = "README.md"
+keywords = ["iced", "widget"]
+
+[dependencies]
+iced_core = "0.14"
+iced_widget = "0.14"
