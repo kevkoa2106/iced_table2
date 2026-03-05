@@ -39,6 +39,18 @@ let table = table(header_id, body_id, &columns, &rows, Message::TableSynced)
 
 To enable column resizing, chain `.on_column_resize(Message::ColumnDragged, Message::ColumnReleased)` and store the resize offsets in your column type.
 
+## Examples
+
+Run the examples from the repository root:
+
+```sh
+# Minimal table with 3 columns and 5 rows
+cargo run --example basic
+
+# Full-featured table with column resizing, footer, and row selection
+cargo run --example advanced
+```
+
 ## License
 
 GPL-3.0
