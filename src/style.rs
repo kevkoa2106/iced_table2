@@ -1,17 +1,41 @@
 use iced_widget::container;
 
-/// A set of rules that dictate the styling of a [`Table`](crate::Table).
+/// Controls the visual appearance of a [`Table`](crate::Table).
+///
+/// Implement this trait on your theme type to customize how headers, footers,
+/// rows, and column dividers are rendered. A default implementation is provided
+/// for [`iced_core::Theme`] with a strong background for the header/footer,
+/// alternating row colors, and a highlight effect on hovered dividers.
 pub trait Catalog {
-    /// The supported style of the [`Catalog`].
+    /// The style value that selects a particular appearance variant.
+    ///
+    /// For simple themes this can be `()`. For themes with multiple table
+    /// styles (e.g. "compact" vs "striped"), use an enum.
     type Style: Default + Clone;
 
-    /// The header [`Style`](iced_widget::container::Style) of the [`Catalog`].
+    /// Returns the [`container::Style`] for the header row.
     fn header(&self, style: &Self::Style) -> container::Style;
-    /// The footer [`Style`](iced_widget::container::Style) of the [`Catalog`].
+
+    /// Returns the [`container::Style`] for the footer row.
     fn footer(&self, style: &Self::Style) -> container::Style;
-    /// The row [`Style`](iced_widget::container::Style) of the [`Catalog`].
+
+    /// Returns the [`container::Style`] for a body row at the given `index`.
+    ///
+    /// The index can be used to produce alternating row colors.
     fn row(&self, style: &Self::Style, index: usize) -> container::Style;
-    /// The divider [`Style`](iced_widget::container::Style) of the [`Catalog`].
+
+    /// Returns the [`container::Style`] for a selected body row at the given `index`.
+    ///
+    /// By default this falls back to [`row()`](Self::row). Override it to
+    /// give selected rows a distinct appearance (e.g. a highlighted background).
+    fn selected_row(&self, style: &Self::Style, index: usize) -> container::Style {
+        self.row(style, index)
+    }
+
+    /// Returns the [`container::Style`] for a column divider.
+    ///
+    /// `hovered` is `true` when the cursor is over the divider or a drag is
+    /// in progress, allowing you to provide visual feedback.
     fn divider(&self, style: &Self::Style, hovered: bool) -> container::Style;
 }
 
@@ -36,6 +60,16 @@ impl Catalog for iced_core::Theme {
         } else {
             self.extended_palette().background.weak
         };
+
+        container::Style {
+            text_color: Some(pair.text),
+            background: Some(pair.color.into()),
+            ..Default::default()
+        }
+    }
+
+    fn selected_row(&self, _style: &Self::Style, _index: usize) -> container::Style {
+        let pair = self.extended_palette().primary.weak;
 
         container::Style {
             text_color: Some(pair.text),
@@ -114,10 +148,29 @@ pub(crate) mod wrapper {
         .into()
     }
 
+    pub fn selected_row<'a, Message, Theme, Renderer>(
+        content: impl Into<Element<'a, Message, Theme, Renderer>>,
+        style: <Theme as super::Catalog>::Style,
+        index: usize,
+    ) -> Element<'a, Message, Theme, Renderer>
+    where
+        Renderer: iced_core::Renderer + 'a,
+        Theme: super::Catalog + 'a,
+        Message: 'a,
+    {
+        Wrapper {
+            content: content.into(),
+            target: Target::SelectedRow { index },
+            style,
+        }
+        .into()
+    }
+
     enum Target {
         Header,
         Footer,
         Row { index: usize },
+        SelectedRow { index: usize },
     }
 
     impl Target {
@@ -133,6 +186,7 @@ pub(crate) mod wrapper {
                 Target::Header => theme.header(style),
                 Target::Footer => theme.footer(style),
                 Target::Row { index } => theme.row(style, *index),
+                Target::SelectedRow { index } => theme.selected_row(style, *index),
             }
         }
     }

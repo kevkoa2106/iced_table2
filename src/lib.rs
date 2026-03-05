@@ -1,4 +1,32 @@
-//! A table widget for iced
+//! A table widget for [iced](https://github.com/iced-rs/iced) 0.14.
+//!
+//! This crate provides a [`Table`] widget that displays rows of data in columns
+//! with synchronized header, body, and optional footer scrolling. Columns can be
+//! interactively resized by dragging dividers, rows can be clicked and visually
+//! highlighted via single-row selection, and the table's appearance is fully
+//! customizable via the [`Catalog`] trait.
+//!
+//! # Getting started
+//!
+//! 1. Define a column type that implements the [`Column`](table::Column) trait.
+//! 2. Create [`widget::Id`](iced_core::widget::Id)s for the header, body, and
+//!    (optionally) footer scrollables.
+//! 3. Call [`table()`] to build the widget.
+//! 4. In your `update` function, handle the `on_sync` message by scrolling
+//!    the header and footer scrollables to the received offset so they stay
+//!    aligned with the body.
+//!
+//! ```ignore
+//! use iced::widget;
+//! use iced_table2::table;
+//!
+//! let header_id = widget::Id::unique();
+//! let body_id = widget::Id::unique();
+//!
+//! let table = table(header_id, body_id, &columns, &rows, Message::TableSynced)
+//!     .cell_padding(8)
+//!     .min_width(600.0);
+//! ```
 #![deny(missing_debug_implementations, missing_docs)]
 pub use style::Catalog;
 pub use table::{table, Table};
@@ -7,20 +35,25 @@ mod divider;
 mod style;
 
 pub mod table {
-    //! Display rows of data into columns
+    //! Types for building and configuring a [`Table`] widget.
     use iced_core::widget;
     use iced_core::{Element, Length, Padding};
-    use iced_widget::{column, container, row, scrollable, Space};
+    use iced_widget::{column, container, mouse_area, row, scrollable, Space};
 
     use super::divider::Divider;
     use super::style;
 
-    /// Creates a new [`Table`] with the provided [`Column`] definitions
-    /// and [`Row`](Column::Row) data.
+    /// Creates a new [`Table`] with the given columns and row data.
     ///
-    /// `on_sync` is needed to keep the header & footer scrollables in sync with
-    /// the body scrollable. It is up to the consumer to emit a [`scroll_to`](iced_widget::scrollable::scroll_to) operation
-    /// from `update` when this message is received.
+    /// `header` and `body` are [`widget::Id`]s for the header and body
+    /// scrollables. The body is the only scrollable that the user interacts
+    /// with directly; the header (and optional footer) are kept in sync
+    /// through `on_sync`.
+    ///
+    /// When the body is scrolled, the table emits the `on_sync` message with
+    /// the current horizontal offset. You **must** handle this message in your
+    /// `update` function by scrolling the header and footer scrollables to the
+    /// received offset so they stay aligned with the body.
     pub fn table<'a, Column, Row, Message, Theme>(
         header: widget::Id,
         body: widget::Id,
@@ -40,6 +73,8 @@ pub mod table {
             on_sync,
             on_column_drag: None,
             on_column_release: None,
+            on_row_press: None,
+            selected_row: None,
             min_width: 0.0,
             min_column_width: 4.0,
             divider_width: 2.0,
@@ -49,15 +84,20 @@ pub mod table {
         }
     }
 
-    /// Defines what a column looks like for each [`Row`](Self::Row) of data.
+    /// Describes how a single column renders its header, cells, and optional footer.
+    ///
+    /// Implement this trait on your column type to tell the [`Table`] what to
+    /// display. Each method receives the column index so a single type can
+    /// represent multiple columns (e.g. an enum or a vec of column definitions).
     pub trait Column<'a, Message, Theme, Renderer> {
-        /// A row of data.
+        /// The row data type that this column knows how to render.
         type Row;
 
-        /// Define the header [`Element`] for this column.
+        /// Returns the header [`Element`] for this column at `col_index`.
         fn header(&'a self, col_index: usize) -> Element<'a, Message, Theme, Renderer>;
 
-        /// Define the cell [`Element`] for this column.
+        /// Returns the cell [`Element`] for the given `col_index`, `row_index`,
+        /// and `row` data.
         fn cell(
             &'a self,
             col_index: usize,
@@ -65,7 +105,10 @@ pub mod table {
             row: &'a Self::Row,
         ) -> Element<'a, Message, Theme, Renderer>;
 
-        /// Define the footer [`Element`] for this column.
+        /// Returns the footer [`Element`] for this column, if any.
+        ///
+        /// The full slice of rows is provided so the footer can compute
+        /// aggregates (sums, counts, etc.). Returns `None` by default.
         fn footer(
             &'a self,
             _col_index: usize,
@@ -74,14 +117,18 @@ pub mod table {
             None
         }
 
-        /// Return the fixed width for this column.
+        /// Returns the current width of this column in logical pixels.
         fn width(&self) -> f32;
 
-        /// Return the offset of an on-going resize of this column.
+        /// Returns the offset of an in-progress resize, if any.
+        ///
+        /// While the user is dragging a column divider, the table calls this
+        /// to determine the visual width adjustment. Return `None` when the
+        /// column is not being resized.
         fn resize_offset(&self) -> Option<f32>;
     }
 
-    /// An element to display rows of data into columns.
+    /// A table widget that displays rows of data organized into columns.
     #[allow(missing_debug_implementations)]
     pub struct Table<'a, Column, Row, Message, Theme>
     where
@@ -95,6 +142,10 @@ pub mod table {
         on_sync: fn(scrollable::AbsoluteOffset) -> Message,
         on_column_drag: Option<fn(usize, f32) -> Message>,
         on_column_release: Option<Message>,
+        /// Callback emitted when a body row is clicked, receiving the row index.
+        on_row_press: Option<fn(usize) -> Message>,
+        /// Index of the currently selected row, if any.
+        selected_row: Option<usize>,
         min_width: f32,
         min_column_width: f32,
         divider_width: f32,
@@ -107,14 +158,16 @@ pub mod table {
     where
         Theme: style::Catalog + container::Catalog,
     {
-        /// Sets the message that will be produced when a [`Column`] is resizing. Setting this
-        /// will enable the resizing interaction.
+        /// Enables interactive column resizing.
         ///
-        /// `on_drag` will emit a message during an on-going resize. It is up to the consumer to return
-        /// this value for the associated column in [`Column::resize_offset`].
+        /// `on_drag` is called continuously while the user drags a column
+        /// divider, receiving the column index and the pixel offset from the
+        /// drag origin. Store this offset and return it from
+        /// [`Column::resize_offset`] so the table can preview the new width.
         ///
-        /// `on_release` is emited when the resize is finished. It is up to the consumer to apply the last
-        /// `on_drag` offset to the column's stored width.
+        /// `on_release` is emitted once when the drag ends. Use it to apply
+        /// the final offset to the column's stored width and clear the
+        /// resize offset.
         pub fn on_column_resize(
             self,
             on_drag: fn(usize, f32) -> Message,
@@ -127,7 +180,33 @@ pub mod table {
             }
         }
 
-        /// Show the footer returned by [`Column::footer`].
+        /// Sets a callback that is emitted when a body row is clicked.
+        ///
+        /// The callback receives the index of the clicked row.
+        pub fn on_row_press(self, on_press: fn(usize) -> Message) -> Self {
+            Self {
+                on_row_press: Some(on_press),
+                ..self
+            }
+        }
+
+        /// Marks the row at `index` as selected.
+        ///
+        /// The selected row is rendered with the
+        /// [`selected_row`](crate::Catalog::selected_row) style instead of the
+        /// normal [`row`](crate::Catalog::row) style.
+        pub fn selected_row(self, index: usize) -> Self {
+            Self {
+                selected_row: Some(index),
+                ..self
+            }
+        }
+
+        /// Enables the footer row using the given scrollable id.
+        ///
+        /// When set, each column's [`Column::footer`] method is called to
+        /// produce footer cells. The footer scrolls in sync with the header
+        /// and body.
         pub fn footer(self, footer: widget::Id) -> Self {
             Self {
                 footer: Some(footer),
@@ -135,15 +214,17 @@ pub mod table {
             }
         }
 
-        /// Sets the minimum width of table.
+        /// Sets the minimum total width of the table in logical pixels.
         ///
-        /// This is useful to use in conjuction with [`responsive`](iced_widget::responsive) to ensure
-        /// the table always fills the width of it's parent container.
+        /// Useful with [`responsive`](iced_widget::responsive) to ensure the
+        /// table always fills the width of its parent container.
         pub fn min_width(self, min_width: f32) -> Self {
             Self { min_width, ..self }
         }
 
-        /// Sets the minimum width a column can be resized to.
+        /// Sets the minimum width a column can be resized to, in logical pixels.
+        ///
+        /// Defaults to `4.0`.
         pub fn min_column_width(self, min_column_width: f32) -> Self {
             Self {
                 min_column_width,
@@ -151,7 +232,9 @@ pub mod table {
             }
         }
 
-        /// Sets the width of the column dividers.
+        /// Sets the width of the column dividers in logical pixels.
+        ///
+        /// Defaults to `2.0`.
         pub fn divider_width(self, divider_width: f32) -> Self {
             Self {
                 divider_width,
@@ -159,7 +242,9 @@ pub mod table {
             }
         }
 
-        /// Sets the [`Padding`] used inside each cell of the [`Table`].
+        /// Sets the [`Padding`] applied inside each cell of the table.
+        ///
+        /// Defaults to `4.0` on all sides.
         pub fn cell_padding(self, cell_padding: impl Into<Padding>) -> Self {
             Self {
                 cell_padding: cell_padding.into(),
@@ -167,7 +252,9 @@ pub mod table {
             }
         }
 
-        /// Sets the style variant of this [`Table`].
+        /// Sets the style of this [`Table`].
+        ///
+        /// See [`Catalog`](crate::Catalog) for how to define custom styles.
         pub fn style(self, style: impl Into<<Theme as style::Catalog>::Style>) -> Self {
             Self {
                 style: style.into(),
@@ -175,7 +262,8 @@ pub mod table {
             }
         }
 
-        ///  Sets the [`Scrollbar`](iced_widget::scrollable::Scrollbar) used for the table's body scrollable.
+        /// Sets the [`Scrollbar`](iced_widget::scrollable::Scrollbar) appearance
+        /// for the table body's horizontal and vertical scrollbars.
         pub fn scrollbar(self, scrollbar: scrollable::Scrollbar) -> Self {
             Self { scrollbar, ..self }
         }
@@ -199,6 +287,8 @@ pub mod table {
                 on_sync,
                 on_column_drag,
                 on_column_release,
+                on_row_press,
+                selected_row,
                 min_width,
                 min_column_width,
                 divider_width,
@@ -239,26 +329,35 @@ pub mod table {
             });
 
             let body = scrollable(column(rows.iter().enumerate().map(|(row_index, _row)| {
-                style::wrapper::row(
-                    row(columns
-                        .iter()
-                        .enumerate()
-                        .map(|(col_index, column)| {
-                            body_container(
-                                col_index,
-                                row_index,
-                                column,
-                                _row,
-                                min_column_width,
-                                divider_width,
-                                cell_padding,
-                            )
-                        })
-                        .chain(dummy_container(columns, min_width, min_column_width))),
-                    style.clone(),
-                    row_index,
-                )
-                .into()
+                let is_selected = selected_row == Some(row_index);
+
+                let row_content = row(columns
+                    .iter()
+                    .enumerate()
+                    .map(|(col_index, column)| {
+                        body_container(
+                            col_index,
+                            row_index,
+                            column,
+                            _row,
+                            min_column_width,
+                            divider_width,
+                            cell_padding,
+                        )
+                    })
+                    .chain(dummy_container(columns, min_width, min_column_width)));
+
+                let styled: Element<'_, Message, Theme, Renderer> = if is_selected {
+                    style::wrapper::selected_row(row_content, style.clone(), row_index)
+                } else {
+                    style::wrapper::row(row_content, style.clone(), row_index)
+                };
+
+                if let Some(on_press) = on_row_press {
+                    mouse_area(styled).on_press((on_press)(row_index)).into()
+                } else {
+                    styled.into()
+                }
             })))
             .id(body)
             .on_scroll(move |viewport| {
