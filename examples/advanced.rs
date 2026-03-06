@@ -1,4 +1,4 @@
-use iced::widget::{self, scrollable, text};
+use iced::widget::{self, row as wrow, scrollable, text};
 use iced::{Element, Task, Theme};
 use iced_table2::table::{self, table};
 
@@ -15,6 +15,8 @@ struct App {
     body_id: widget::Id,
     footer_id: widget::Id,
     selected_row: Option<usize>,
+    sort_column: Option<usize>,
+    sort_ascending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +25,7 @@ enum Message {
     ColumnDragged(usize, f32),
     ColumnReleased,
     RowPressed(usize),
+    HeaderPressed(usize),
 }
 
 struct Product {
@@ -36,13 +39,19 @@ struct MyColumn {
     title: &'static str,
     width: f32,
     resize_offset: Option<f32>,
+    sort: Option<bool>, // None = not sorted, Some(true) = ascending, Some(false) = descending
 }
 
 impl<'a> table::Column<'a, Message, Theme, iced::Renderer> for MyColumn {
     type Row = Product;
 
     fn header(&'a self, _col_index: usize) -> Element<'a, Message> {
-        text(self.title).into()
+        let label = text(self.title);
+        match self.sort {
+            Some(true) => wrow![label, text(" ▲")].into(),
+            Some(false) => wrow![label, text(" ▼")].into(),
+            None => label.into(),
+        }
     }
 
     fn cell(
@@ -94,10 +103,10 @@ impl Default for App {
     fn default() -> Self {
         Self {
             columns: vec![
-                MyColumn { title: "Product", width: 200.0, resize_offset: None },
-                MyColumn { title: "Category", width: 150.0, resize_offset: None },
-                MyColumn { title: "Price", width: 120.0, resize_offset: None },
-                MyColumn { title: "Quantity", width: 100.0, resize_offset: None },
+                MyColumn { title: "Product", width: 200.0, resize_offset: None, sort: None },
+                MyColumn { title: "Category", width: 150.0, resize_offset: None, sort: None },
+                MyColumn { title: "Price", width: 120.0, resize_offset: None, sort: None },
+                MyColumn { title: "Quantity", width: 100.0, resize_offset: None, sort: None },
             ],
             rows: vec![
                 Product { name: "Laptop", category: "Electronics", price: 999.99, quantity: 15 },
@@ -115,6 +124,8 @@ impl Default for App {
             body_id: widget::Id::unique(),
             footer_id: widget::Id::unique(),
             selected_row: None,
+            sort_column: None,
+            sort_ascending: true,
         }
     }
 }
@@ -147,6 +158,29 @@ impl App {
                     Some(index)
                 };
             }
+            Message::HeaderPressed(index) => {
+                if self.sort_column == Some(index) {
+                    self.sort_ascending = !self.sort_ascending;
+                } else {
+                    self.sort_column = Some(index);
+                    self.sort_ascending = true;
+                }
+                for (i, col) in self.columns.iter_mut().enumerate() {
+                    col.sort = if i == index { Some(self.sort_ascending) } else { None };
+                }
+                let ascending = self.sort_ascending;
+                self.rows.sort_by(|a, b| {
+                    let ord = match index {
+                        0 => a.name.cmp(b.name),
+                        1 => a.category.cmp(b.category),
+                        2 => a.price.partial_cmp(&b.price).unwrap(),
+                        3 => a.quantity.cmp(&b.quantity),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    if ascending { ord } else { ord.reverse() }
+                });
+                self.selected_row = None;
+            }
         }
         Task::none()
     }
@@ -162,6 +196,7 @@ impl App {
         .footer(self.footer_id.clone())
         .on_column_resize(Message::ColumnDragged, Message::ColumnReleased)
         .on_row_press(Message::RowPressed)
+        .on_header_press(Message::HeaderPressed)
         .cell_padding(8)
         .min_width(600.0);
 

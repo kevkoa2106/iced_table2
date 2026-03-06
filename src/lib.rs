@@ -3,8 +3,9 @@
 //! This crate provides a [`Table`] widget that displays rows of data in columns
 //! with synchronized header, body, and optional footer scrolling. Columns can be
 //! interactively resized by dragging dividers, rows can be clicked and visually
-//! highlighted via single-row selection, and the table's appearance is fully
-//! customizable via the [`Catalog`] trait.
+//! highlighted via single-row selection, header cells can be clicked to trigger
+//! sorting, and the table's appearance is fully customizable via the [`Catalog`]
+//! trait.
 //!
 //! # Getting started
 //!
@@ -74,6 +75,7 @@ pub mod table {
             on_column_drag: None,
             on_column_release: None,
             on_row_press: None,
+            on_header_press: None,
             selected_row: None,
             min_width: 0.0,
             min_column_width: 4.0,
@@ -144,6 +146,8 @@ pub mod table {
         on_column_release: Option<Message>,
         /// Callback emitted when a body row is clicked, receiving the row index.
         on_row_press: Option<fn(usize) -> Message>,
+        /// Callback emitted when a header cell is clicked, receiving the column index.
+        on_header_press: Option<fn(usize) -> Message>,
         /// Index of the currently selected row, if any.
         selected_row: Option<usize>,
         min_width: f32,
@@ -186,6 +190,17 @@ pub mod table {
         pub fn on_row_press(self, on_press: fn(usize) -> Message) -> Self {
             Self {
                 on_row_press: Some(on_press),
+                ..self
+            }
+        }
+
+        /// Sets a callback that is emitted when a header cell is clicked.
+        ///
+        /// The callback receives the index of the clicked column, which can
+        /// be used to implement sorting.
+        pub fn on_header_press(self, on_press: fn(usize) -> Message) -> Self {
+            Self {
+                on_header_press: Some(on_press),
                 ..self
             }
         }
@@ -288,6 +303,7 @@ pub mod table {
                 on_column_drag,
                 on_column_release,
                 on_row_press,
+                on_header_press,
                 selected_row,
                 min_width,
                 min_column_width,
@@ -302,7 +318,7 @@ pub mod table {
                     .iter()
                     .enumerate()
                     .map(|(index, column)| {
-                        header_container(
+                        let cell = header_container(
                             index,
                             column,
                             on_column_drag,
@@ -311,7 +327,12 @@ pub mod table {
                             divider_width,
                             cell_padding,
                             style.clone(),
-                        )
+                        );
+                        if let Some(on_press) = on_header_press {
+                            mouse_area(cell).on_press((on_press)(index)).into()
+                        } else {
+                            cell
+                        }
                     })
                     .chain(dummy_container(columns, min_width, min_column_width))),
                 style.clone(),
